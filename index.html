@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VR Türkiye Haritası – İl Bulma</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#0d1b24;font-family:system-ui,sans-serif}
+  #info{position:fixed;left:14px;top:12px;max-width:340px;color:#d8efe6;font-size:13px;line-height:1.4;z-index:2;text-shadow:0 1px 3px #000}
+</style>
+<!-- Three.js: WebXR için CDN üzerinden ES module. Dosya HTTPS (veya localhost) üzerinden açılmalıdır. -->
+<script type="importmap">{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+</head>
+<body>
+<div id="info">Masaüstünde fareyle oynayabilirsiniz. Quest'te sağ alttaki <b>ENTER VR</b> düğmesine basın;
+kumanda ışınıyla ili gösterip tetikle seçin.</div>
+<script type="module">
+import * as THREE from 'three';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+
+/* =====================================================================
+   0) VARLIKLAR (ASSETS) — HIGGSFIELD ENTEGRASYON NOKTASI
+   Higgsfield'da üretilen görselleri host edip URL'lerini buraya yazın.
+   Boş bırakılırsa kod içi (procedural) yedek görseller kullanılır.
+   - skybox  : 2:1 equirectangular panorama (ör. "twilight Anatolian
+               mountains panorama, soft stars, 360 equirectangular")
+   - boardTex: harita panosu için kare doku (ör. "dark walnut wood
+               texture, seamless, top-down")
+   ===================================================================== */
+const ASSETS = { skybox: '', boardTex: '' };
+
+/* =====================================================================
+   1) VERİ — 81 il: plaka(id), ad, bölge, enlem, boylam
+   Her il mesh'i userData.il içinde {id, il_adi, bolge, merkez_koordinat} taşır.
+   ===================================================================== */
+const BOLGE = {M:'Marmara',E:'Ege',A:'Akdeniz',I:'İç Anadolu',K:'Karadeniz',D:'Doğu Anadolu',G:'Güneydoğu Anadolu'};
+const RENK  = {M:0x5b8fd6,E:0xe0a458,A:0xd9706b,I:0xc9b458,K:0x58b08a,D:0x9a7fd1,G:0xd98fb0};
+const KABARTMA = {M:.012,E:.024,A:.018,I:.028,K:.022,D:.040,G:.020}; // yaklaşık yükselti etkisi
+const RAW = `Adana,A,37.00,35.32;Adıyaman,G,37.76,38.28;Afyonkarahisar,E,38.76,30.54;Ağrı,D,39.72,43.05;Amasya,K,40.65,35.83;
+Ankara,I,39.93,32.86;Antalya,A,36.90,30.70;Artvin,K,41.18,41.82;Aydın,E,37.85,27.85;Balıkesir,M,39.65,27.89;
+Bilecik,M,40.14,29.98;Bingöl,D,38.88,40.50;Bitlis,D,38.40,42.11;Bolu,K,40.73,31.61;Burdur,A,37.72,30.29;
+Bursa,M,40.19,29.06;Çanakkale,M,40.15,26.41;Çankırı,I,40.60,33.62;Çorum,K,40.55,34.95;Denizli,E,37.78,29.09;
+Diyarbakır,G,37.91,40.24;Edirne,M,41.68,26.56;Elazığ,D,38.67,39.22;Erzincan,D,39.75,39.49;Erzurum,D,39.90,41.27;
+Eskişehir,I,39.78,30.52;Gaziantep,G,37.07,37.38;Giresun,K,40.91,38.39;Gümüşhane,K,40.46,39.48;Hakkâri,D,37.58,43.74;
+Hatay,A,36.40,36.35;Isparta,A,37.76,30.55;Mersin,A,36.80,34.64;İstanbul,M,41.01,28.98;İzmir,E,38.42,27.14;
+Kars,D,40.60,43.10;Kastamonu,K,41.38,33.78;Kayseri,I,38.73,35.49;Kırklareli,M,41.73,27.22;Kırşehir,I,39.15,34.16;
+Kocaeli,M,40.85,29.88;Konya,I,37.87,32.48;Kütahya,E,39.42,29.98;Malatya,D,38.35,38.31;Manisa,E,38.61,27.43;
+Kahramanmaraş,A,37.58,36.94;Mardin,G,37.31,40.74;Muğla,E,37.22,28.36;Muş,D,38.74,41.49;Nevşehir,I,38.62,34.71;
+Niğde,I,37.97,34.68;Ordu,K,40.98,37.88;Rize,K,41.02,40.52;Sakarya,M,40.76,30.40;Samsun,K,41.29,36.33;
+Siirt,G,37.93,41.94;Sinop,K,42.03,35.15;Sivas,I,39.75,37.02;Tekirdağ,M,40.98,27.51;Tokat,K,40.31,36.55;
+Trabzon,K,41.00,39.72;Tunceli,D,39.11,39.55;Şanlıurfa,G,37.16,38.79;Uşak,E,38.68,29.41;Van,D,38.49,43.38;
+Yozgat,I,39.82,34.81;Zonguldak,K,41.45,31.80;Aksaray,I,38.37,34.03;Bayburt,K,40.26,40.22;Karaman,I,37.18,33.22;
+Kırıkkale,I,39.85,33.51;Batman,G,37.89,41.13;Şırnak,G,37.52,42.46;Bartın,K,41.64,32.34;Ardahan,D,41.11,42.70;
+Iğdır,D,39.92,44.05;Yalova,M,40.65,29.27;Karabük,K,41.20,32.62;Kilis,G,36.72,37.12;Osmaniye,A,37.07,36.25;Düzce,K,40.84,31.16`;
+const ILLER = RAW.replace(/\n/g,'').split(';').map((s,i)=>{
+  const [ad,b,la,lo]=s.split(',');
+  return {id:i+1, il_adi:ad, bolge:BOLGE[b], bk:b, merkez_koordinat:[+la,+lo]};
+});
+// Türkiye dış hattı (basitleştirilmiş, [boylam, enlem]); iller bu sınır içine Voronoi ile bölünür.
+const SINIR = [[26.35,41.75],[26.6,41.95],[27.0,42.05],[28.0,41.97],[28.9,41.25],[30.2,41.2],[31.1,41.15],[31.8,41.5],[32.4,41.75],
+ [33.0,41.95],[33.9,42.0],[35.1,42.05],[35.9,41.7],[36.5,41.3],[37.9,41.05],[39.7,41.0],[40.5,41.05],[41.5,41.5],[42.7,41.55],
+ [43.5,41.1],[43.7,40.2],[44.8,39.7],[44.4,38.4],[44.8,37.3],[42.3,37.2],[40.0,36.95],[38.0,36.85],[36.7,36.7],[36.1,35.9],
+ [36.0,36.7],[34.6,36.75],[33.7,36.2],[32.8,36.05],[31.9,36.6],[30.7,36.85],[30.15,36.3],[29.1,36.6],[28.25,36.85],[27.4,37.0],
+ [27.25,37.85],[26.3,38.3],[26.75,38.7],[26.7,39.3],[26.1,39.6],[26.15,40.4],[26.1,40.8],[26.15,41.3]];
+
+/* Projeksiyon: boylam/enlem → metre (tahta üzerinde). K = derece başına metre */
+const K = 0.085, LON0 = 35.4, LAT0 = 39.0, COS = 0.777;
+const proj = (lat,lon)=>[(lon-LON0)*COS*K, (lat-LAT0)*K];
+
+/* Sutherland–Hodgman: çokgeni a*x+b*y<=c yarı düzlemiyle kırp */
+function clip(poly,a,b,c){
+  const out=[];
+  for(let i=0;i<poly.length;i++){
+    const p=poly[i], q=poly[(i+1)%poly.length];
+    const dp=a*p[0]+b*p[1]-c, dq=a*q[0]+b*q[1]-c;
+    if(dp<=0) out.push(p);
+    if(dp*dq<0){ const t=dp/(dp-dq); out.push([p[0]+t*(q[0]-p[0]), p[1]+t*(q[1]-p[1])]); }
+  }
+  return out;
+}
+
+/* =====================================================================
+   2) SAHNE / RENDERER (WebXR performans ayarları dahil)
+   ===================================================================== */
+const renderer = new THREE.WebGLRenderer({antialias:true, powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local-floor');
+renderer.xr.setFoveation?.(1);                 // Quest: kenar çözünürlüğünü azaltıp FPS kazanır
+document.body.appendChild(renderer.domElement);
+document.body.appendChild(VRButton.createButton(renderer));
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.05, 60);
+camera.position.set(0,1.55,0.75); camera.lookAt(0,1.05,-0.8);   // yalnızca masaüstü önizleme için
+
+// Gökyüzü: Higgsfield panoraması varsa onu, yoksa procedural gradyanı kullan
+(function sky(){
+  const c=document.createElement('canvas'); c.width=4; c.height=256; const g=c.getContext('2d');
+  const gr=g.createLinearGradient(0,0,0,256); gr.addColorStop(0,'#0b1730'); gr.addColorStop(.55,'#1f4a5a'); gr.addColorStop(1,'#0d1b24');
+  g.fillStyle=gr; g.fillRect(0,0,4,256);
+  const t=new THREE.CanvasTexture(c); t.mapping=THREE.EquirectangularReflectionMapping; t.colorSpace=THREE.SRGBColorSpace;
+  scene.background=t;
+  if(ASSETS.skybox) new THREE.TextureLoader().load(ASSETS.skybox, tx=>{tx.mapping=THREE.EquirectangularReflectionMapping; tx.colorSpace=THREE.SRGBColorSpace; scene.background=tx;});
+})();
+scene.add(new THREE.HemisphereLight(0xdff3ff,0x2a2a35,1.6));
+const sun=new THREE.DirectionalLight(0xffffff,1.6); sun.position.set(1,3,1.5); scene.add(sun);
+
+// Zemin (tek draw call, hafif materyal)
+const floor=new THREE.Mesh(new THREE.CircleGeometry(4,48), new THREE.MeshLambertMaterial({color:0x16262e}));
+floor.rotation.x=-Math.PI/2; scene.add(floor);
+
+/* =====================================================================
+   3) HARİTA MASASI: bel hizası, hafif eğimli (~26°)
+   ===================================================================== */
+const mapGroup=new THREE.Group();
+mapGroup.position.set(0,0.95,-0.75); mapGroup.rotation.x=0.45;   // kuzey (uzak kenar) yukarı kalkar
+scene.add(mapGroup);
+
+const board=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.03,0.78),
+  new THREE.MeshLambertMaterial({color:0x4a3626}));
+board.position.y=-0.02; mapGroup.add(board);
+if(ASSETS.boardTex) new THREE.TextureLoader().load(ASSETS.boardTex, tx=>{tx.colorSpace=THREE.SRGBColorSpace; board.material.map=tx; board.material.color.set(0xffffff); board.material.needsUpdate=true;});
+// Ayak (pedestal)
+const ped=new THREE.Mesh(new THREE.CylinderGeometry(.05,.09,.95,12), new THREE.MeshLambertMaterial({color:0x2c3a44}));
+ped.position.set(0,-.5,0.05); mapGroup.add(ped);
+
+/* İl mesh'lerini üret: Voronoi hücresi ∩ Türkiye sınırı → Extrude (low-poly) */
+const FLAT=0.014, LIFT=0.035;
+const pts=ILLER.map(il=>proj(...il.merkez_koordinat));
+const sinir=SINIR.map(([lo,la])=>proj(la,lo));
+const meshes=[];
+ILLER.forEach((il,i)=>{
+  let poly=sinir.map(p=>p.slice());
+  for(let j=0;j<ILLER.length&&poly.length>2;j++){
+    if(j===i) continue;
+    const [xi,yi]=pts[i],[xj,yj]=pts[j];
+    poly=clip(poly,2*(xj-xi),2*(yj-yi),xj*xj+yj*yj-xi*xi-yi*yi);   // i'ye daha yakın bölge
+  }
+  if(poly.length<3) return;
+  // Hücreleri hafif küçült → iller arasında ince sınır çizgisi (ekstra çizgi draw call'ı gerekmez)
+  const cx=poly.reduce((s,p)=>s+p[0],0)/poly.length, cy=poly.reduce((s,p)=>s+p[1],0)/poly.length;
+  const shape=new THREE.Shape(poly.map(p=>new THREE.Vector2(cx+(p[0]-cx)*.965, cy+(p[1]-cy)*.965)));
+  const geo=new THREE.ExtrudeGeometry(shape,{depth:1,bevelEnabled:false});
+  geo.rotateX(-Math.PI/2);                     // shape XY → tahta XZ, derinlik → +Y
+  const mat=new THREE.MeshLambertMaterial({color:RENK[il.bk]});
+  const m=new THREE.Mesh(geo,mat);
+  m.scale.y=FLAT; m.userData={il, h:KABARTMA[il.bk], flash:0, kind:'', solved:false, active:true};
+  m.userData.il.merkez_dunya=[cx,cy];
+  mapGroup.add(m); meshes.push(m);
+});
+
+/* =====================================================================
+   4) OYUN DURUMU — şablon değişkenleri: hedef_il, skor, kalan_sure, dogruluk_orani
+   ===================================================================== */
+const OYUN={ hedef_il:null, skor:0, kalan_sure:null, dogruluk_orani:0, dogru:0, toplam:0,
+  mod:'Klasik', bolge:'Tümü', kabartma:false, calisiyor:true, mesaj:'Haritada ili bulun ve dokunun!' };
+const SURE=60, BOLGELER=['Tümü',...Object.values(BOLGE)];
+let torba=[];
+
+function yenile(){                              // yeni tur
+  OYUN.skor=0; OYUN.dogru=0; OYUN.toplam=0; OYUN.dogruluk_orani=0; OYUN.calisiyor=true;
+  OYUN.kalan_sure = OYUN.mod==='Süreli' ? SURE : null;
+  meshes.forEach(m=>{ const u=m.userData; u.solved=false; u.flash=0;
+    u.active = OYUN.bolge==='Tümü' || u.il.bolge===OYUN.bolge; recolor(m); });
+  torba=meshes.filter(m=>m.userData.active).map(m=>m.userData.il).sort(()=>Math.random()-.5);
+  sonraki(); OYUN.mesaj='Haritada ili bulun ve dokunun!'; hudDirty=true;
+}
+function sonraki(){ if(!torba.length){ torba=meshes.filter(m=>m.userData.active).map(m=>m.userData.il).sort(()=>Math.random()-.5);
+    meshes.forEach(m=>{m.userData.solved=false;recolor(m);}); }
+  OYUN.hedef_il=torba.pop(); }
+function recolor(m){ const u=m.userData;
+  m.material.color.set(!u.active?0x4b5560 : u.solved?0x3fbf5f : RENK[u.il.bk]); }
+
+function sec(m){                                 // il seçimi (kumanda / fare)
+  if(!m||!OYUN.calisiyor) return false;
+  const u=m.userData, hedef=OYUN.hedef_il;
+  if(u.il===hedef){                              // DOĞRU
+    OYUN.skor+=100; OYUN.dogru++; OYUN.toplam++; u.solved=true; u.flash=.7; u.kind='ok'; recolor(m);
+    OYUN.mesaj=`✔ ${u.il.il_adi} — ${u.il.bolge}, plaka ${u.il.id}`;   // bilgi kartı
+    ses([[523,0,.12],[659,.1,.12],[784,.2,.2]]); sonraki(); 
+  } else {                                       // YANLIŞ
+    OYUN.skor-=20; OYUN.toplam++; u.flash=.7; u.kind='bad';
+    OYUN.mesaj=`✖ Bu ${u.il.il_adi}. Tekrar dene!`; ses([[160,0,.25,'sawtooth']]);
+  }
+  OYUN.dogruluk_orani=Math.round(100*OYUN.dogru/OYUN.toplam); hudDirty=true; return u.il===hedef;
+}
+
+/* =====================================================================
+   5) SES (WebAudio — dış dosya gerekmez)
+   ===================================================================== */
+let ac;
+function ses(seq){ try{
+  ac=ac||new (window.AudioContext||window.webkitAudioContext)(); if(ac.state==='suspended') ac.resume();
+  seq.forEach(([f,t,d,type])=>{ const o=ac.createOscillator(), g=ac.createGain(), n=ac.currentTime+t;
+    o.type=type||'sine'; o.frequency.value=f; g.gain.setValueAtTime(.001,n);
+    g.gain.exponentialRampToValueAtTime(.25,n+.02); g.gain.exponentialRampToValueAtTime(.001,n+d);
+    o.connect(g).connect(ac.destination); o.start(n); o.stop(n+d+.05); });
+}catch(e){} }
+
+/* =====================================================================
+   6) HUD (tek canvas dokusu — sadece değişince yeniden çizilir)
+   ===================================================================== */
+function canvasPlane(w,h,pw,ph){
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  const t=new THREE.CanvasTexture(c); t.colorSpace=THREE.SRGBColorSpace;
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(pw,ph), new THREE.MeshBasicMaterial({map:t,transparent:true}));
+  m.userData.ctx=c.getContext('2d'); m.userData.tex=t; return m;
+}
+const hud=canvasPlane(1024,300,1.3,.38); hud.position.set(0,1.95,-1.05); scene.add(hud);
+let hudDirty=true, sonSn=-1;
+function rr(g,x,y,w,h,r){g.beginPath();g.roundRect(x,y,w,h,r);g.fill();}
+function hudCiz(){
+  const g=hud.userData.ctx; g.clearRect(0,0,1024,300);
+  g.fillStyle='rgba(8,20,28,.82)'; rr(g,0,0,1024,300,34);
+  g.fillStyle='#8fd9c0'; g.font='600 34px system-ui,sans-serif'; g.textAlign='left';
+  g.fillText(OYUN.calisiyor?'Bu ili bul:':'Süre doldu!',40,62);
+  g.fillStyle='#fff'; g.font='700 96px system-ui,sans-serif';
+  g.fillText(OYUN.calisiyor?OYUN.hedef_il.il_adi:`Skor ${OYUN.skor}`,40,160);
+  g.font='500 38px system-ui,sans-serif'; g.fillStyle='#ffd27a';
+  g.fillText(`Skor ${OYUN.skor}`,40,225); g.fillStyle='#bfe6ff';
+  g.fillText(`Doğruluk %${OYUN.dogruluk_orani}`,300,225);
+  g.fillStyle='#ffb3a8'; g.fillText(OYUN.kalan_sure==null?'Süre ∞':`Süre ${Math.ceil(OYUN.kalan_sure)} sn`,640,225);
+  g.fillStyle='#d8efe6'; g.font='500 32px system-ui,sans-serif'; g.fillText(OYUN.mesaj,40,276);
+  hud.userData.tex.needsUpdate=true; hudDirty=false;
+}
+
+/* =====================================================================
+   7) 3D MENÜ DÜĞMELERİ (sol yan panel)
+   ===================================================================== */
+const menu=new THREE.Group(); menu.position.set(-1.05,1.3,-.7); menu.rotation.y=.6; scene.add(menu);
+const dugmeler=[];
+function dugme(y,etiket,fn){
+  const b=canvasPlane(512,160,.4,.125); b.position.y=y; b.userData.btn=fn; b.userData.etiket=etiket;
+  b.userData.ciz=()=>{ const g=b.userData.ctx; g.clearRect(0,0,512,160); g.fillStyle='rgba(20,60,70,.92)'; rr(g,0,0,512,160,28);
+    g.fillStyle='#fff'; g.font='600 40px system-ui,sans-serif'; g.textAlign='center'; g.textBaseline='middle';
+    g.fillText(b.userData.etiket(),256,82); b.userData.tex.needsUpdate=true; };
+  b.userData.ciz(); menu.add(b); dugmeler.push(b); return b;
+}
+dugme( .21,()=>`Mod: ${OYUN.mod}`,   ()=>{OYUN.mod=OYUN.mod==='Klasik'?'Süreli':'Klasik'; yenile();});
+dugme( .07,()=>`Bölge: ${OYUN.bolge}`,()=>{OYUN.bolge=BOLGELER[(BOLGELER.indexOf(OYUN.bolge)+1)%BOLGELER.length]; yenile();});
+dugme(-.07,()=>`Kabartma: ${OYUN.kabartma?'Açık':'Kapalı'}`,()=>{OYUN.kabartma=!OYUN.kabartma;});
+dugme(-.21,()=>'Yeniden başlat',   ()=>yenile());
+const menuCiz=()=>dugmeler.forEach(b=>b.userData.ciz());
+
+/* =====================================================================
+   8) ETKİLEŞİM: kumanda ışını + yakın dokunma + fare yedek + haptik
+   ===================================================================== */
+const ray=new THREE.Raycaster(), tmpM=new THREE.Matrix4(), V=new THREE.Vector3();
+const hedefler=()=>[...meshes.filter(m=>m.userData.active),...dugmeler];
+const kontrolculer=[];
+const grip=new XRControllerModelFactory();
+for(let i=0;i<2;i++){
+  const c=renderer.xr.getController(i);
+  c.userData={hover:null,onceki:false,src:null};
+  const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3(0,0,-1)]),
+    new THREE.LineBasicMaterial({color:0x9ff0ff}));
+  line.scale.z=1.2; c.add(line); c.userData.line=line;
+  c.addEventListener('connected',e=>{c.userData.src=e.data;});
+  c.addEventListener('selectstart',()=>ates(c));         // tetik
+  scene.add(c); kontrolculer.push(c);
+  const gr=renderer.xr.getControllerGrip(i); gr.add(grip.createControllerModel(gr)); scene.add(gr);
+}
+function haptik(c,s=.6,ms=60){ try{ const gp=c.userData.src?.gamepad;
+  const a=gp?.hapticActuators?.[0]; if(a?.pulse) a.pulse(s,ms);
+  else gp?.vibrationActuator?.playEffect('dual-rumble',{duration:ms,strongMagnitude:s,weakMagnitude:s}); }catch(e){} }
+function ates(c){ const m=c.userData.hover; if(!m) return;
+  if(m.userData.btn){ m.userData.btn(); menuCiz(); hudDirty=true; ses([[440,0,.08]]); haptik(c,.3,30); return; }
+  const dogru=sec(m); dogru?haptik(c,1,120):haptik(c,.5,200); }
+
+// Fare (XR dışında test için)
+const fare=new THREE.Vector2(9,9); let fareHover=null;
+addEventListener('pointermove',e=>{fare.set(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1);});
+addEventListener('pointerdown',()=>{ if(renderer.xr.isPresenting||!fareHover) return;
+  if(fareHover.userData.btn){fareHover.userData.btn();menuCiz();hudDirty=true;} else sec(fareHover); });
+
+function isinla(origin,dir,far){ ray.set(origin,dir); ray.far=far; return ray.intersectObjects(hedefler(),false)[0]; }
+
+/* =====================================================================
+   9) DÖNGÜ
+   ===================================================================== */
+const clock=new THREE.Clock(), hovers=new Set();
+renderer.setAnimationLoop(()=>{
+  const dt=Math.min(clock.getDelta(),.05), t=clock.elapsedTime;
+  hovers.clear();
+
+  // Kumandalar: ışın + 2.5 cm'den yakın temas = "dokunma"
+  kontrolculer.forEach(c=>{
+    if(!c.visible){c.userData.hover=null;return;}
+    tmpM.identity().extractRotation(c.matrixWorld);
+    const o=V.setFromMatrixPosition(c.matrixWorld).clone(), d=new THREE.Vector3(0,0,-1).applyMatrix4(tmpM);
+    const h=isinla(o,d,3); c.userData.hover=h?h.object:null;
+    c.userData.line.scale.z=h?h.distance:1.2;
+    if(h){ hovers.add(h.object); const yakin=h.distance<.025;
+      if(yakin&&!c.userData.onceki) ates(c); c.userData.onceki=yakin; } else c.userData.onceki=false;
+  });
+  // Fare
+  if(!renderer.xr.isPresenting){ ray.setFromCamera(fare,camera); ray.far=50;
+    const h=ray.intersectObjects(hedefler(),false)[0]; fareHover=h?h.object:null; if(fareHover) hovers.add(fareHover); }
+
+  // Zamanlayıcı (süreli mod)
+  if(OYUN.calisiyor && OYUN.kalan_sure!=null){
+    OYUN.kalan_sure=Math.max(0,OYUN.kalan_sure-dt);
+    if(Math.ceil(OYUN.kalan_sure)!==sonSn){sonSn=Math.ceil(OYUN.kalan_sure);hudDirty=true;}
+    if(OYUN.kalan_sure<=0){OYUN.calisiyor=false;OYUN.mesaj=`Bitti! ${OYUN.dogru} doğru, %${OYUN.dogruluk_orani} doğruluk.`;ses([[392,0,.15],[330,.15,.15],[262,.3,.3]]);}
+  }
+
+  // İl animasyonları: hover yükselmesi, kabartma, doğru/yanlış parlama
+  const k1=Math.min(1,dt*14), k2=Math.min(1,dt*6);
+  for(const m of meshes){ const u=m.userData;
+    m.position.y+=((hovers.has(m)&&u.active?LIFT:0)-m.position.y)*k1;
+    m.scale.y+=((OYUN.kabartma?u.h:FLAT)-m.scale.y)*k2;
+    if(u.flash>0){ u.flash-=dt;
+      const on=u.kind==='ok'?1:(Math.sin(t*40)>0?1:0);                 // yanlışta yanıp söner
+      m.material.emissive.set(u.kind==='ok'?0x22ff66:0xff2222).multiplyScalar(on*.8);
+    } else if(hovers.has(m)) m.material.emissive.set(0x1a3a4a); else m.material.emissive.set(0);
+  }
+  dugmeler.forEach(b=>b.scale.setScalar(hovers.has(b)?1.08:1));
+  if(hudDirty) hudCiz();
+  renderer.render(scene,camera);
+});
+
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+renderer.xr.addEventListener('sessionstart',()=>{ document.getElementById('info').style.display='none'; ses([[1,0,.01]]); });  // ses bağlamını aç
+if(!navigator.xr) document.getElementById('info').insertAdjacentHTML('beforeend','<br><i>Bu tarayıcıda WebXR yok; masaüstü önizleme modu.</i>');
+yenile();
+</script>
+</body>
+</html>
